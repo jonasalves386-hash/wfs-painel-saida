@@ -48,22 +48,22 @@ function tempoClass(mins) {
 
 // ─── STATUS POR SERVIÇO ───────────────────────────────────────────────────────
 
-// FONIA: AZUL=escalado | CINZA>40min | AMARELO>30min | VERMELHO otherwise
+// FONIA: AZUL=escalado | CINZA>40min | AMARELO>50min | VERMELHO otherwise
 function foniaStatus(f) {
   if (f.fonia?.escalado) return STATUS.AZUL;
   const mins = minutesTo(f.t);
-  if (mins > 40) return STATUS.CINZA;
-  if (mins > 30) return STATUS.AMARELO;
+  if (mins > 50) return STATUS.CINZA;
+  if (mins > 40) return STATUS.AMARELO;
   return STATUS.VERMELHO;
 }
 
-// PUSHBACK: VERDE=finalizado | AZUL=escalado | CINZA>15min | AMARELO>5min | VERMELHO
+// PUSHBACK: VERDE=finalizado | AZUL=escalado | CINZA>20min | AMARELO>15min | VERMELHO
 function pushbackStatus(f) {
   if (f.pushback?.finalizado) return STATUS.VERDE;
   if (f.pushback?.escalado)   return STATUS.AZUL;
   const mins = minutesTo(f.t);
-  if (mins > 15) return STATUS.CINZA;
-  if (mins > 5)  return STATUS.AMARELO;
+  if (mins > 20) return STATUS.CINZA;
+  if (mins > 15)  return STATUS.AMARELO;
   return STATUS.VERMELHO;
 }
 
@@ -102,8 +102,34 @@ function montarDataHojePorHorario(horario) {
   return d;
 }
 
+function normalizarTempo(tempo) {
+  if (typeof tempo === 'number') return tempo;
+  if (typeof tempo !== 'string') return null;
+  const s = tempo.trim();
+  if (s.endsWith('h')) {
+    const n = parseFloat(s);
+    return isNaN(n) ? null : Math.round(n * 60);
+  }
+  if (s.endsWith('min')) {
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+  }
+  return null;
+}
+
 function isPending(f) {
-  return Object.values(f.s).some(v => v === 'NAO');
+  const mins = normalizarTempo(minutesTo(f.t));
+  if (typeof mins === 'number' && !isNaN(mins) && mins <= 0) return true;
+
+  return SERVICES.some(svc => {
+    let st;
+    if      (svc === 'fonia')    st = foniaStatus(f);
+    else if (svc === 'pushback') st = pushbackStatus(f);
+    else if (svc === 'qtu')      st = qtuStatus(f);
+    else if (svc === 'qta')      st = qtaStatus(f);
+    else return false;
+    return st === STATUS.AMARELO || st === STATUS.VERMELHO;
+  });
 }
 
 function allEscalado(f) {
