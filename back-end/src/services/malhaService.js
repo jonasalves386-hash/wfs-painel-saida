@@ -228,10 +228,20 @@ async function getVoos() {
 
   // Maps indexados por data|voo
   const monitorMap = new Map();
-  for (const linha of monitorSaidas) {
-    if (!linha.data || !linha.voo) continue;
-    monitorMap.set(chaveVoo(linha.data, linha.voo), linha);
+const monitorMap = new Map();
+
+for (const linha of monitorSaidas) {
+  if (!linha.data || !linha.voo) continue;
+
+  const chave = chaveVoo(linha.data, linha.voo);
+  const existente = monitorMap.get(chave);
+
+  // Se houver duplicidade no monitor_saidas, prioriza a linha que tem PUSH G/H preenchido.
+  // Isso evita sobrescrever uma linha com push por outra linha igual sem push.
+  if (!existente || (!existente.push && linha.push)) {
+    monitorMap.set(chave, linha);
   }
+}
 
   const limpezaMap = new Map();
   for (const linha of limpeza) {
