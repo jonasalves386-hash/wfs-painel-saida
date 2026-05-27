@@ -136,7 +136,7 @@ async function getMonitorSaidas() {
     data: extrairData(String(row[0] ?? '')),   // A = DATA
     voo:  String(row[10] ?? '').trim(),         // K = dep_flight_number
     etd:  extrairHorario(row[3] ?? ''),         // D = ETD_FINAL
-    push: extrairHorario(row[6] ?? '') || extrairHorario(row[7] ?? ''), // G=w_push, H=c_push
+    push: extrairHorario(row[5] ?? ''), // F= DESCALÇO
   }));
 }
 
