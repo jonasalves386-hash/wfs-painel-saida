@@ -43,6 +43,15 @@ function chaveVoo(dataValor, vooValor) {
   return `${normalizarDataChave(dataValor)}|${normalizarTexto(vooValor)}`;
 }
 
+function isCancelado(...valores) {
+  return valores.some(v =>
+    String(v || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .includes('CANCELADO')
+  );
+}
 // ─── VALIDAÇÃO FONIA ──────────────────────────────────────────────────────────
 
 const FONIA_EQUIPES_VALIDAS_RAW = [
@@ -190,9 +199,13 @@ async function getVoos() {
     throw new Error('GOOGLE_API_KEY e GOOGLE_SHEET_ID são obrigatórias no .env');
   }
 
-  // PROG!T:AI — índices a partir de T (col 0):
-  // 0=T(PREFIXO), 1=U(DATA), 2=V(VOO), 3=W(DESTINO), 4=X(STD/ETD), 9=AC(FONIA1), 10=AD(FONIA2), 15=AI(PUSHBACK)
-  const range = encodeURIComponent('PROG') + '!T:AI';
+  // PROG!T:AK — índices a partir de T (col 0):
+  // 0=T(PREFIXO), 1=U(DATA), 2=V(VOO), 3=W(DESTINO), 4=X(STD/ETD)
+  // 9=AC(FONIA1), 10=AD(FONIA2)
+  // 15=AI(PUSHBACK HORÁRIO ESCALADO)
+  // 16=AJ(PUSHBACK FINALIZADO/OK)
+  // 17=AK(PUSHBACK COMPLEMENTO/CONFIRMAÇÃO)
+  const range = encodeURIComponent('PROG') + '!N:AK';
   const url   = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?key=${apiKey}&t=${Date.now()}`;
 
   const [progResult, monitorResult, limpezaResult] = await Promise.allSettled([
@@ -233,16 +246,28 @@ async function getVoos() {
     .slice(1)
     .filter(row => row && row.some(c => String(c ?? '').trim() !== ''))
     .map(row => {
-      const dataSaida = extrairData(String(row[1] ?? ''));  // U = DATA SAÍDA
-      const voo       = String(row[2] ?? '').trim();         // V = VOO
-      const destino   = String(row[3] ?? '').trim();         // W = DESTINO
-      const stdProg   = extrairHorario(row[4] ?? '');        // X = STD (fallback ETD)
-      const fonia1    = String(row[9]  ?? '').trim();        // AC = EQUIPE
-      const fonia2    = String(row[10] ?? '').trim();        // AD = EQ. APOIO
-      const pushCell  = extrairHorario(row[15] ?? '');       // AI = HORÁRIO ESCALADO
+// Range agora começa em N
+// N=0 O=1 P=2 Q=3 R=4 S=5 T=6 U=7 V=8 W=9 X=10 ... AC=15 AD=16 AI=22 AJ=23 AK=24
+
+      const cancelN   = String(row[0] ?? '').trim();         // N
+      const cancelO   = String(row[1] ?? '').trim();         // O
+
+      const dataSaida = extrairData(String(row[7] ?? ''));   // U = DATA SAÍDA
+      const voo       = String(row[8] ?? '').trim();         // V = VOO
+      const destino   = String(row[9] ?? '').trim();         // W = DESTINO
+      const stdProg   = extrairHorario(row[10] ?? '');       // X = STD/ETD fallback
+
+      const fonia1    = String(row[15] ?? '').trim();        // AC
+      const fonia2    = String(row[16] ?? '').trim();        // AD
+
+      const pushCell      = extrairHorario(row[21] ?? '');   // AI = HORÁRIO ESCALADO
+      const pushFinalCell = extrairHorario(row[22] ?? '');   // AJ = HORÁRIO FINALIZADO/OK
+      const pushConfCell  = String(row[23] ?? '').trim();    // AK = CONFIRMAÇÃO/RESPONSÁVEL
 
       if (!dataSaida || !voo) return null;
       if (!isHoje(dataSaida)) return null;
+      // Ignorar voos cancelados
+      if (isCancelado(cancelN, cancelO)) return null;
 
       const chave   = chaveVoo(dataSaida, voo);
       const monitor = monitorMap.get(chave);
@@ -254,23 +279,28 @@ async function getVoos() {
 
       if (!isHorarioValido(etd)) return null;
 
-      // Remoção: push/finalizado + 2 minutos
+      // Remoção: push real G/H + 5 minutos.
+      // Enquanto estiver dentro desses 5 minutos, o front vai pintar todos os serviços de verde.
       if (isHorarioValido(pushFinalizado)) {
-        const minutosDepoisPush = -(minutosAteHorario(pushFinalizado));
-        if (minutosDepoisPush >= 2) return null;
+      const minutosDepoisPush = -(minutosAteHorario(pushFinalizado));
+      if (minutosDepoisPush >= 5) return null;
       }
 
       const minutosParaETD = minutosAteHorario(etd);
       if (minutosParaETD === null) return null;
       if (minutosParaETD > 60)    return null; // além da janela futura
-      if (minutosParaETD < -120)  return null; // mais de 2h atrás sem push
+      if (minutosParaETD < -60)  return null; // mais de 1h atrás sem push
 
       // ── FONIA (equipes de fonia via lista de validação) ──
       const foniaEsc = foniaEscalada(fonia1, fonia2);
 
-      // ── PUSHBACK (HORÁRIO ESCALADO = HH:MM válido) ──
-      const pushbackEsc      = isHorarioValido(pushCell);
-      const pushbackFinalizado = isHorarioValido(pushFinalizado);
+      // ── PUSHBACK ──
+      // Escalado somente quando AI tem HH:MM válido E AK está preenchido.
+      // Verde operacional do PUSHBACK quando está escalado E AJ tem HH:MM válido.
+      // Push real G/H é gatilho geral para saída do painel e para pintar todos os serviços de verde no front.
+      const pushbackEsc = isHorarioValido(pushCell) && pushConfCell.length > 0;
+      const pushbackFin = pushbackEsc && isHorarioValido(pushFinalCell);
+      const pushRealDetectado = isHorarioValido(pushFinalizado);
 
       // ── QTU (P e Q = nomes individuais) ──
       const qtu1     = limp?.qtu1     || '';
@@ -300,22 +330,26 @@ async function getVoos() {
         servicos: {
           fonia: {
             escalado: foniaEsc,
+            pushReal: pushRealDetectado,
             valor:    [fonia1, fonia2].filter(Boolean).join(' | '),
           },
           pushback: {
             escalado:   pushbackEsc,
-            finalizado: pushbackFinalizado,
-            valor:      pushCell || pushFinalizado || '',
+            finalizado: pushbackFin,
+            pushReal:   pushRealDetectado,
+            valor:      [pushCell, pushConfCell, pushFinalCell].filter(Boolean).join(' | '),
           },
           qtu: {
             escalado:   qtuEsc,
             finalizado: qtuFin,
+            pushReal:   pushRealDetectado,
             valor:      [qtu1, qtu2].filter(Boolean).join(' | '),
           },
           qta: {
             escalado:    qtaEsc,
             finalizado:  qtaFin,
             emAndamento: qtaEmAnd,
+            pushReal:   pushRealDetectado,
             valor:       [qta1, qta2].filter(Boolean).join(' | '),
           },
         },

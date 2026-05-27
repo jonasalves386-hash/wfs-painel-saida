@@ -327,7 +327,7 @@ td.cell-svc.col-pending { background: transparent; }
 
 /* AZUL — escalado / ok operacional */
 .chip-azul {
-  background: #1d4ed8;
+  background: #006eff;
   color: #ffffff;
 }
 
@@ -351,7 +351,7 @@ td.cell-svc.col-pending { background: transparent; }
 
 /* VERDE — ok / confirmado */
 .chip-verde {
-  background: #15803d;
+  background: #00ff0d;
   color: #ffffff;
 }
 

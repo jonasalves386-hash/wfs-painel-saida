@@ -48,42 +48,87 @@ function tempoClass(mins) {
 
 // ─── STATUS POR SERVIÇO ───────────────────────────────────────────────────────
 
-// FONIA: AZUL=escalado | CINZA>40min | AMARELO>50min | VERMELHO otherwise
+function vooEmPushReal(f) {
+  return Boolean(
+    f.fonia?.pushReal ||
+    f.pushback?.pushReal ||
+    f.qtu?.pushReal ||
+    f.qta?.pushReal
+  );
+}
+
+// FONIA: se push real foi detectado, tudo verde.
+// Caso contrário: AZUL=escalado | AMARELO<=50 | VERMELHO<=40 | CINZA
 function foniaStatus(f) {
+  if (vooEmPushReal(f)) return STATUS.VERDE;
   if (f.fonia?.escalado) return STATUS.AZUL;
+
   const mins = minutesTo(f.t);
-  if (mins > 50) return STATUS.CINZA;
-  if (mins > 40) return STATUS.AMARELO;
-  return STATUS.VERMELHO;
+  if (mins <= 40) return STATUS.VERMELHO;
+  if (mins <= 50) return STATUS.AMARELO;
+  return STATUS.CINZA;
 }
 
-// PUSHBACK: VERDE=finalizado | AZUL=escalado | CINZA>20min | AMARELO>15min | VERMELHO
+// PUSHBACK:
+// VERDE = push real detectado OU escalado + AJ válido.
+// AZUL = AI válido + AK preenchido.
+// AMARELO<=20 | VERMELHO<=15 | CINZA.
 function pushbackStatus(f) {
+  if (vooEmPushReal(f)) return STATUS.VERDE;
   if (f.pushback?.finalizado) return STATUS.VERDE;
-  if (f.pushback?.escalado)   return STATUS.AZUL;
+
   const mins = minutesTo(f.t);
-  if (mins > 20) return STATUS.CINZA;
-  if (mins > 15)  return STATUS.AMARELO;
-  return STATUS.VERMELHO;
+
+  // Se está escalado mas ainda não finalizou, cobra novamente no -15
+  if (f.pushback?.escalado) {
+    if (mins <= 15) return STATUS.VERMELHO;
+    return STATUS.AZUL;
+  }
+
+  if (mins <= 15) return STATUS.VERMELHO;
+  if (mins <= 20) return STATUS.AMARELO;
+  return STATUS.CINZA;
 }
 
-// QTU: VERDE=finalizado | AZUL=escalado | CINZA>30min | AMARELO>15min | VERMELHO
+// QTU:
+// VERDE = finalizado.
+// Se escalado mas não finalizado: AZUL até >35, AMARELO<=35, VERMELHO<=30.
+// Se não escalado: AMARELO<=45, VERMELHO<=30.
 function qtuStatus(f) {
+  if (vooEmPushReal(f)) return STATUS.VERDE;
   if (f.qtu?.finalizado) return STATUS.VERDE;
-  if (f.qtu?.escalado)   return STATUS.AZUL;
+
   const mins = minutesTo(f.t);
-  if (mins > 30) return STATUS.CINZA;
-  if (mins > 15) return STATUS.AMARELO;
-  return STATUS.VERMELHO;
+
+  if (f.qtu?.escalado) {
+    if (mins <= 30) return STATUS.VERMELHO;
+    if (mins <= 35) return STATUS.AMARELO;
+    return STATUS.AZUL;
+  }
+
+  if (mins <= 30) return STATUS.VERMELHO;
+  if (mins <= 45) return STATUS.AMARELO;
+  return STATUS.CINZA;
 }
 
-// QTA: VERDE=finalizado(O+L>=AC) | AZUL=escalado | AMARELO=30min+emAndamento | VERMELHO=15min | CINZA
+// QTA:
+// VERDE = finalizado pela regra de porcentagem.
+// Se escalado mas não finalizado: AZUL até >35, AMARELO<=35, VERMELHO<=30.
+// Se não escalado: AMARELO<=45, VERMELHO<=30.
 function qtaStatus(f) {
-  if (f.qta?.finalizado)   return STATUS.VERDE;
-  if (f.qta?.escalado)     return STATUS.AZUL;
+  if (vooEmPushReal(f)) return STATUS.VERDE;
+  if (f.qta?.finalizado) return STATUS.VERDE;
+
   const mins = minutesTo(f.t);
-  if (mins <= 15)                          return STATUS.VERMELHO;
-  if (mins <= 30 && f.qta?.emAndamento)    return STATUS.AMARELO;
+
+  if (f.qta?.escalado) {
+    if (mins <= 30) return STATUS.VERMELHO;
+    if (mins <= 35) return STATUS.AMARELO;
+    return STATUS.AZUL;
+  }
+
+  if (mins <= 30) return STATUS.VERMELHO;
+  if (mins <= 45) return STATUS.AMARELO;
   return STATUS.CINZA;
 }
 
@@ -150,10 +195,10 @@ function adaptarVoos(apiVoos) {
       const data = montarDataHojePorHorario(horario);
       if (!data) return null;
 
-      const fonia    = v.servicos?.fonia    ?? { escalado: false, valor: '' };
-      const pushback = v.servicos?.pushback ?? { escalado: false, finalizado: false, valor: '' };
-      const qtu      = v.servicos?.qtu      ?? { escalado: false, finalizado: false, valor: '' };
-      const qta      = v.servicos?.qta      ?? { escalado: false, finalizado: false, emAndamento: false, valor: '' };
+      const fonia    = v.servicos?.fonia    ?? { escalado: false, pushReal: false, valor: '' };
+      const pushback = v.servicos?.pushback ?? { escalado: false, finalizado: false, pushReal: false, valor: '' };
+      const qtu      = v.servicos?.qtu      ?? { escalado: false, finalizado: false, pushReal: false, valor: '' };
+      const qta      = v.servicos?.qta      ?? { escalado: false, finalizado: false, emAndamento: false, pushReal: false, valor: '' };
 
       return {
         id:       String(v.voo || '').trim(),
@@ -223,7 +268,6 @@ function render() {
   const flights = getSortedLote();
   const pending = flights.filter(isPending).length;
 
-  document.getElementById('cnt-attn').textContent  = pending;
   document.getElementById('cnt-total').textContent = flights.length;
 
   const colPending = {};
