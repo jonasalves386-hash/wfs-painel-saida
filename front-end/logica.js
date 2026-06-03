@@ -81,7 +81,7 @@ function pushbackStatus(f) {
 
   // Se está escalado mas ainda não finalizou, cobra novamente no -15
   if (f.pushback?.escalado) {
-    if (mins <= 15) return STATUS.VERMELHO;
+    if (mins <= 10) return STATUS.VERMELHO;
     return STATUS.AZUL;
   }
 
