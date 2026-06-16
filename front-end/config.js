@@ -6,5 +6,5 @@ const API_BASE_URL = (() => {
     return 'http://localhost:3000';
   }
 
-  return `${window.location.origin}/api`;
+  return `${window.location.origin}/api-saidas`;
 })();
