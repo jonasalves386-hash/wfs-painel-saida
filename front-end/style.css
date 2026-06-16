@@ -232,7 +232,7 @@ tr.sep-row td {
 /* ── CABEÇALHO VOO — número grande, coluna fina ── */
 th.col-voo {
   font-family: var(--mono);
-  font-size: 32px;   /* número do voo GRANDE */
+  font-size: 35px;   /* número do voo GRANDE */
   font-weight: 800;
   color: #fff;
   letter-spacing: 0;
@@ -253,7 +253,7 @@ th.col-voo.has-pending { color: #ffffff; }
 /* ── CÉLULAS INFO ── */
 td.cell-info {
   font-family: var(--mono);
-  font-size: 32px;
+  font-size: 35px;
   font-weight: 600;
   color: var(--text-muted);
   text-align: center;
