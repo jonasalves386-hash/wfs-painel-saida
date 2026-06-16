@@ -43,14 +43,23 @@ function chaveVoo(dataValor, vooValor) {
   return `${normalizarDataChave(dataValor)}|${normalizarTexto(vooValor)}`;
 }
 
+// Radicais/abrevia\u00e7\u00f5es aceitos como indica\u00e7\u00e3o de cancelamento.
+// CANCEL cobre CANCELADO/CANCELADA/CANCELADOS/CANCELAMENTO/CANCEL (com ou sem espa\u00e7os extras).
+// CNL/CNLD/CANC cobrem abrevia\u00e7\u00f5es comuns de opera\u00e7\u00e3o.
+const CANCELADO_PADROES = [/CANCEL/, /\bCNLD?\b/, /\bCANC\b/];
+
 function isCancelado(...valores) {
-  return valores.some(v =>
-    String(v || '')
+  return valores.some(v => {
+    const texto = String(v || '')
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .toUpperCase()
-      .includes('CANCELADO')
-  );
+      .trim();
+    if (!texto) return false;
+    // Remove espa\u00e7os internos para pegar casos como "CANCE LADO" / "C A N C"
+    const semEspacos = texto.replace(/\s+/g, '');
+    return CANCELADO_PADROES.some(re => re.test(texto) || re.test(semEspacos));
+  });
 }
 // ─── VALIDAÇÃO FONIA ──────────────────────────────────────────────────────────
 
@@ -266,8 +275,9 @@ async function getVoos() {
 
       if (!dataSaida || !voo) return null;
       if (!isHoje(dataSaida)) return null;
-      // Ignorar voos cancelados
-      if (isCancelado(cancelN, cancelO)) return null;
+      // Ignorar voos cancelados — checa colunas N/O e também AC/AD (equipe/eq.apoio),
+      // pois às vezes o cancelamento só é marcado nessas colunas de equipe.
+      if (isCancelado(cancelN, cancelO, fonia1, fonia2)) return null;
 
       const chave   = chaveVoo(dataSaida, voo);
       const monitor = monitorMap.get(chave);
