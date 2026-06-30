@@ -10,12 +10,19 @@ const {
 
 // ─── AUTH ────────────────────────────────────────────────────────────────────
 
+// Singleton: auth e client criados uma única vez por processo, reutilizados em
+// toda execução subsequente — evita criação de objeto e round-trip OAuth a cada ciclo.
+let _sheetsClient = null;
+
 function getGoogleSheetsServiceClient() {
-  const auth = new google.auth.GoogleAuth({
-    keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-  });
-  return google.sheets({ version: 'v4', auth });
+  if (!_sheetsClient) {
+    const auth = new google.auth.GoogleAuth({
+      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    });
+    _sheetsClient = google.sheets({ version: 'v4', auth });
+  }
+  return _sheetsClient;
 }
 
 // ─── NORMALIZAÇÃO ────────────────────────────────────────────────────────────
@@ -198,9 +205,22 @@ function lMaiorOuIgualAC(lVal, acVal) {
   return String(lVal) >= String(acVal);
 }
 
+// ─── CACHE ────────────────────────────────────────────────────────────────────
+
+// Cache em memória: evita múltiplas leituras ao Sheets quando mais de um cliente
+// acessa /voos dentro do mesmo janela de 30s. O resultado é idêntico ao sem-cache
+// pois o frontend atualiza nessa mesma frequência.
+let _voosCache     = null;
+let _voosCacheTime = 0;
+const CACHE_TTL_MS = 30_000;
+
 // ─── GETVOOOS ─────────────────────────────────────────────────────────────────
 
 async function getVoos() {
+  const agora = Date.now();
+  if (_voosCache && agora - _voosCacheTime < CACHE_TTL_MS) {
+    return _voosCache;
+  }
   const apiKey  = process.env.GOOGLE_API_KEY;
   const sheetId = process.env.GOOGLE_SHEET_ID;
 
@@ -374,6 +394,8 @@ async function getVoos() {
     .slice(0, 12);
 
   console.log('[getVoos] Voos saídas retornados:', voos.length);
+  _voosCache     = voos;
+  _voosCacheTime = Date.now();
   return voos;
 }
 
