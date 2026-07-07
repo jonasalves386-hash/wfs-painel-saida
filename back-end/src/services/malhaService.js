@@ -10,18 +10,14 @@ const {
 
 // ─── AUTH ────────────────────────────────────────────────────────────────────
 
-// Singleton: auth e client criados uma única vez por processo, reutilizados em
-// toda execução subsequente — evita criação de objeto e round-trip OAuth a cada ciclo.
-let _sheetsClient = null;
+// Singleton inicializado uma única vez no carregamento do módulo.
+const _sheetsAuth   = new google.auth.GoogleAuth({
+  keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+  scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+});
+const _sheetsClient = google.sheets({ version: 'v4', auth: _sheetsAuth });
 
 function getGoogleSheetsServiceClient() {
-  if (!_sheetsClient) {
-    const auth = new google.auth.GoogleAuth({
-      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-    });
-    _sheetsClient = google.sheets({ version: 'v4', auth });
-  }
   return _sheetsClient;
 }
 
@@ -140,10 +136,10 @@ async function getMonitorSaidas() {
   const sheetId = '1RusxsxP7g-PKVJX5b8qPrl_VojLhvflXqdLOQlk88EQ';
   const sheets  = getGoogleSheetsServiceClient();
 
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: sheetId,
-    range: 'monitor_saidas!A:K',
-  });
+  const response = await sheets.spreadsheets.values.get(
+    { spreadsheetId: sheetId, range: 'monitor_saidas!A:K' },
+    { timeout: 10000 }
+  );
 
   const rows = response.data.values;
   if (!rows || rows.length < 2) return [];
@@ -172,6 +168,7 @@ async function getLimpezaSaidas() {
 
   const { data } = await axios.get(url, {
     headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    timeout: 10000,
   });
 
   const rows = data.values;
@@ -238,7 +235,7 @@ async function getVoos() {
   const url   = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?key=${apiKey}&t=${Date.now()}`;
 
   const [progResult, monitorResult, limpezaResult] = await Promise.allSettled([
-    axios.get(url, { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } }),
+    axios.get(url, { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }, timeout: 10000 }),
     getMonitorSaidas(),
     getLimpezaSaidas(),
   ]);
