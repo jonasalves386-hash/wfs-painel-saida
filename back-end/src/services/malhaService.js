@@ -158,6 +158,8 @@ async function getMonitorSaidas() {
 // QTA: J(9), K(10) escalado | L(11) comparação | O(14) finalizado | AC(28) comparação2
 // QTU: P(15), Q(16) escalado | T(19) finalizado
 
+let limpezaSaidasCache = [];
+
 async function getLimpezaSaidas() {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error('GOOGLE_API_KEY não definida');
@@ -166,29 +168,44 @@ async function getLimpezaSaidas() {
   const range   = encodeURIComponent('NARROW') + '!A:AC';
   const url     = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?key=${apiKey}&t=${Date.now()}`;
 
-  const { data } = await axios.get(url, {
-    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
-    timeout: 10000,
-  });
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { data } = await axios.get(url, {
+        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+        timeout: 20000,
+      });
 
-  const rows = data.values;
-  if (!rows || rows.length < 2) return [];
+      const rows = data.values;
+      if (!rows || rows.length < 2) {
+        console.warn('[LIMPEZA SAIDAS] Falha na leitura. Utilizando último cache válido.');
+        return limpezaSaidasCache;
+      }
 
-  return rows.slice(1).map(row => ({
-    // Chave de match: dados da SAÍDA nas colunas X e Y
-    data:     extrairData(String(row[23] ?? '')),  // X = DATA saída
-    voo:      String(row[24] ?? '').trim(),         // Y = VOO saída
-    // QTA
-    qta1:     String(row[9]  ?? '').trim(),         // J = OP.QTA
-    qta2:     String(row[10] ?? '').trim(),         // K = AUXILIAR
-    qtaL:     String(row[11] ?? '').trim(),         // L = %
-    qtaFinal: extrairHorario(row[14] ?? ''),        // O = HORA F.
-    qtaAC:    String(row[28] ?? '').trim(),         // AC = comparação
-    // QTU
-    qtu1:     String(row[15] ?? '').trim(),         // P = OP.QTU
-    qtu2:     String(row[16] ?? '').trim(),         // Q = AUXILIAR
-    qtuFinal: extrairHorario(row[19] ?? ''),        // T = HORA F.
-  }));
+      const resultado = rows.slice(1).map(row => ({
+        // Chave de match: dados da SAÍDA nas colunas X e Y
+        data:     extrairData(String(row[23] ?? '')),  // X = DATA saída
+        voo:      String(row[24] ?? '').trim(),         // Y = VOO saída
+        // QTA
+        qta1:     String(row[9]  ?? '').trim(),         // J = OP.QTA
+        qta2:     String(row[10] ?? '').trim(),         // K = AUXILIAR
+        qtaL:     String(row[11] ?? '').trim(),         // L = %
+        qtaFinal: extrairHorario(row[14] ?? ''),        // O = HORA F.
+        qtaAC:    String(row[28] ?? '').trim(),         // AC = comparação
+        // QTU
+        qtu1:     String(row[15] ?? '').trim(),         // P = OP.QTU
+        qtu2:     String(row[16] ?? '').trim(),         // Q = AUXILIAR
+        qtuFinal: extrairHorario(row[19] ?? ''),        // T = HORA F.
+      }));
+      limpezaSaidasCache = resultado;
+      return resultado;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 3) await new Promise(r => setTimeout(r, 400 * attempt));
+    }
+  }
+  console.warn('[LIMPEZA SAIDAS] Falha na leitura. Utilizando último cache válido.');
+  return limpezaSaidasCache;
 }
 
 // ─── HELPER: L >= AC ─────────────────────────────────────────────────────────
