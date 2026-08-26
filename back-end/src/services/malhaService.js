@@ -1,4 +1,3 @@
-const axios = require('axios');
 const { google } = require('googleapis');
 const {
   isHorarioValido,
@@ -152,22 +151,18 @@ async function getMonitorSaidas() {
 let limpezaSaidasCache = [];
 
 async function getLimpezaSaidas() {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey) throw new Error('GOOGLE_API_KEY não definida');
-
   const sheetId = '17ggPnOyf-xzDX8WWgGhKGyf0fkwiCvmWZhLbYEup8Eo';
-  const range   = encodeURIComponent('NARROW') + '!A:AC';
-  const url     = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?key=${apiKey}&t=${Date.now()}`;
+  const sheets  = getGoogleSheetsServiceClient();
 
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const { data } = await axios.get(url, {
-        headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
-        timeout: 20000,
-      });
+      const response = await sheets.spreadsheets.values.get(
+        { spreadsheetId: sheetId, range: 'NARROW!A:AC' },
+        { timeout: 20000 }
+      );
 
-      const rows = data.values;
+      const rows = response.data.values;
       if (!rows || rows.length < 2) {
         console.warn('[LIMPEZA SAIDAS] Falha na leitura. Utilizando último cache válido.');
         return limpezaSaidasCache;
@@ -226,11 +221,10 @@ async function getVoos() {
   if (_voosCache && agora - _voosCacheTime < CACHE_TTL_MS) {
     return _voosCache;
   }
-  const apiKey  = process.env.GOOGLE_API_KEY;
   const sheetId = process.env.GOOGLE_SHEET_ID;
 
-  if (!apiKey || !sheetId) {
-    throw new Error('GOOGLE_API_KEY e GOOGLE_SHEET_ID são obrigatórias no .env');
+  if (!sheetId) {
+    throw new Error('GOOGLE_SHEET_ID é obrigatória no .env');
   }
 
   // PROG!T:AK — índices a partir de T (col 0):
@@ -239,11 +233,13 @@ async function getVoos() {
   // 15=AI(PUSHBACK HORÁRIO ESCALADO)
   // 16=AJ(PUSHBACK FINALIZADO/OK)
   // 17=AK(PUSHBACK COMPLEMENTO/CONFIRMAÇÃO)
-  const range = encodeURIComponent('PROG') + '!N:AK';
-  const url   = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?key=${apiKey}&t=${Date.now()}`;
+  const sheets = getGoogleSheetsServiceClient();
 
   const [progResult, monitorResult, limpezaResult] = await Promise.allSettled([
-    axios.get(url, { headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }, timeout: 10000 }),
+    sheets.spreadsheets.values.get(
+      { spreadsheetId: sheetId, range: 'PROG!N:AK' },
+      { timeout: 10000 }
+    ),
     getMonitorSaidas(),
     getLimpezaSaidas(),
   ]);
