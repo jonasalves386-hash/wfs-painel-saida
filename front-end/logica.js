@@ -167,6 +167,13 @@ function parseHorarioOperacional(voo) {
   return montarDataHojePorHorario(horario);
 }
 
+// "WENDEL GONÇALVES DA SILVA" -> "WENDEL GONÇALVES" (primeiro nome + primeiro sobrenome).
+function nomeCurto(nome) {
+  const partes = String(nome || '').trim().split(/\s+/).filter(Boolean);
+  const sobrenome = partes.slice(1).find(p => !/^(D[AEO]S?|E)$/i.test(p));
+  return [partes[0], sobrenome].filter(Boolean).join(' ');
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -375,7 +382,7 @@ function render() {
 
       const col = colPending[f.id] ? 'cell-svc col-pending' : 'cell-svc';
       const operador = svc === 'pushback' && st !== STATUS.CINZA && f.pushback?.escalado
-        ? String(f.pushback.operador || '').trim()
+        ? nomeCurto(f.pushback.operador)
         : '';
       if (operador) {
         return `<td class="${col}"><div class="chip ${st.cls}"><span class="chip-nome">${escapeHtml(operador)}</span></div></td>`;
