@@ -9,8 +9,7 @@ const { ProviderError } = require('./providers/httpClient');
 
 function createApp({ service, env = process.env, logger = console } = {}) {
   const app = express();
-  const restServices = String(env.REST_SERVICOS || 'pushback').split(',').map((name) => name.trim().toLowerCase()).filter(Boolean);
-  const saidasService = service || createSaidasService(createProviders(env), logger, { restServices });
+  const saidasService = service || createSaidasService(createProviders(env), logger);
   const allowedOrigins = [
     env.FRONTEND_URL,
     'https://jonasalves386-hash.github.io',

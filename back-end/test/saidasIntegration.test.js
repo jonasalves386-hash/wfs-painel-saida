@@ -127,10 +127,12 @@ test('filtra Wide Body e duplicados no backend antes da resposta', async () => {
   assert.equal(result.voos[0].voo, 'LA3210');
   assert.equal(result.voos[0].fonia, undefined);
   assert.equal(result.voos[0].servicos.fonia.escalado, true);
-  assert.equal(result.voos[0].servicos.pushback.escalado, true);
+  // Pushback vem da API própria (sem provider aqui): REST não alimenta essa linha.
+  assert.equal(result.voos[0].servicos.pushback.escalado, false);
+  assert.equal(result.voos[0].servicos.pushback.indisponivel, true);
   assert.equal(result.voos[0].servicos.qtu.finalizado, true);
   assert.deepEqual(result.meta.disponibilidade, {
-    malha: 'disponivel', fonia: 'disponivel', rest: 'disponivel',
+    malha: 'disponivel', fonia: 'disponivel', pushback: 'nao_configurada', rest: 'disponivel',
   });
   assert.deepEqual(result.meta.contagens, {
     snapshot: 4, saidasNormalizadas: 4, saidasExibiveis: 1,
@@ -470,19 +472,100 @@ test('cache antigo ainda é usado quando a Malha falha', async (t) => {
   assert.equal(reader.getCacheStatus().stale, true);
 });
 
-test('só os serviços REST liberados sinalizam; os demais ficam cinza', async () => {
-  const providers = {
+const { PushbackProvider, adaptPushbackRecord } = require('../src/providers/PushbackProvider');
+
+function pushbackApiRecord(overrides = {}) {
+  return {
+    id: 'pb-1',
+    prefixo: 'PRABC',
+    saida: { voo: '3210', data: '2026-09-29', std: '2026-09-29T15:20:00.000Z', etd: '2026-09-29T15:30:00.000Z' },
+    escalado: true,
+    operador: { nome: 'FULANO DE TAL', matricula: '123' },
+    na_posicao: null,
+    acoplagem: null,
+    finalizado: false,
+    ...overrides,
+  };
+}
+
+function servicesWithPushback(getEscalados) {
+  return {
     malha: { getFlightsSnapshot: async () => [departure()] },
     fonia: { isConfigured: () => false, getAssignments: async () => [] },
-    rest: { isConfigured: () => true, getDepartureServices: async () => [] },
+    rest: { isConfigured: () => false, getDepartureServices: async () => [] },
+    pushback: { isConfigured: () => true, getEscalados },
   };
-  const result = await createSaidasService(providers, { error() {} }, { restServices: ['pushback'] }).getVoos({
-    date: '2026-09-29',
-    now: new Date('2026-09-29T15:00:00.000Z'),
+}
+
+const AT_1500 = new Date('2026-09-29T15:00:00.000Z');
+
+test('pushback: adapta escalado, na posição e acoplado', () => {
+  assert.deepEqual(adaptPushbackRecord(pushbackApiRecord()).pushback, {
+    escalado: true, naPosicao: false, acoplado: false, finalizado: false, operador: 'FULANO DE TAL', valor: 'FULANO DE TAL',
   });
+  const acoplado = adaptPushbackRecord(pushbackApiRecord({ na_posicao: '2026-09-29T15:10:00.000Z', acoplagem: '2026-09-29T15:25:00.000Z' }));
+  assert.equal(acoplado.pushback.acoplado, true);
+  assert.equal(acoplado.pushback.finalizado, true);
+  assert.equal(adaptPushbackRecord({ escalado: true }), null);
+});
+
+test('pushback: casa data + voo ("3210" da API com "LA 3210" da Malha) e só a linha PUSHBACK sinaliza', async () => {
+  const dates = [];
+  const result = await createSaidasService(servicesWithPushback(async (date) => {
+    dates.push(date);
+    return [adaptPushbackRecord(pushbackApiRecord())];
+  }), { error() {} }).getVoos({ date: '2026-09-29', now: AT_1500 });
+
+  assert.deepEqual(dates, ['2026-09-29']);
   const { servicos } = result.voos[0];
   assert.equal(servicos.pushback.indisponivel, false);
+  assert.equal(servicos.pushback.escalado, true);
+  assert.equal(servicos.pushback.operador, 'FULANO DE TAL');
   assert.equal(servicos.qtu.indisponivel, true);
   assert.equal(servicos.qta.indisponivel, true);
   assert.equal(servicos.fonia.indisponivel, true);
+  assert.equal(result.meta.disponibilidade.pushback, 'disponivel');
+});
+
+test('pushback: não casa voo de outra data', async () => {
+  const result = await createSaidasService(servicesWithPushback(async () => [
+    adaptPushbackRecord(pushbackApiRecord({ saida: { voo: '3210', data: '2026-09-28' } })),
+  ]), { error() {} }).getVoos({ date: '2026-09-29', now: AT_1500 });
+  assert.equal(result.voos[0].servicos.pushback.escalado, false);
+  assert.equal(result.voos[0].servicos.pushback.indisponivel, false);
+});
+
+test('pushback: falha da API reaproveita o último retorno por 5 min e depois fica cinza', async () => {
+  let fail = false;
+  const service = createSaidasService(servicesWithPushback(async () => {
+    if (fail) throw new ProviderError('fora', { code: 'PROVIDER_TIMEOUT', status: 504 });
+    return [adaptPushbackRecord(pushbackApiRecord())];
+  }), { error() {} });
+
+  await service.getVoos({ date: '2026-09-29', now: AT_1500 });
+  fail = true;
+  const reused = await service.getVoos({ date: '2026-09-29', now: new Date(AT_1500.getTime() + 60000) });
+  assert.equal(reused.voos[0].servicos.pushback.escalado, true);
+  assert.equal(reused.voos[0].servicos.pushback.indisponivel, false);
+
+  const expired = await service.getVoos({ date: '2026-09-29', now: new Date(AT_1500.getTime() + 6 * 60000) });
+  assert.equal(expired.voos[0].servicos.pushback.indisponivel, true);
+  assert.equal(expired.meta.disponibilidade.pushback, 'indisponivel');
+});
+
+test('pushback: provider envia x-api-key e filtra por data', async () => {
+  let call;
+  const provider = new PushbackProvider({
+    url: 'https://pushback.test/integracao/escalados',
+    apiKey: 'segredo',
+    fetchImpl: async (url, options) => {
+      call = { url, options };
+      return { ok: true, json: async () => [pushbackApiRecord()] };
+    },
+  });
+  const records = await provider.getEscalados('2026-09-29');
+  assert.equal(call.url, 'https://pushback.test/integracao/escalados?data=2026-09-29');
+  assert.equal(call.options.headers['x-api-key'], 'segredo');
+  assert.equal(records[0].flight_number, '3210');
+  assert.equal(new PushbackProvider({ url: '', apiKey: 'x' }).isConfigured(), false);
 });

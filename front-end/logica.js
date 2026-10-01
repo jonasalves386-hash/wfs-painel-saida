@@ -77,10 +77,10 @@ function foniaStatus(f) {
   return STATUS.CINZA;
 }
 
-// PUSHBACK:
-// VERDE = push real detectado OU escalado + AJ válido.
-// AZUL = AI válido + AK preenchido.
-// AMARELO<=20 | VERMELHO<=15 | CINZA.
+// PUSHBACK (API de escalados do Pushback, casada por data + voo):
+// VERDE = na posição e acoplado.
+// AZUL = escalado (mostra o operador); VERMELHO se faltar <=10 min sem acoplar.
+// Sem escala: AMARELO<=20 | VERMELHO<=15 | CINZA fora da janela.
 function pushbackStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
   if (f.pushback?.indisponivel) return STATUS.CINZA;
@@ -374,6 +374,12 @@ function render() {
       else                         st = STATUS.CINZA;
 
       const col = colPending[f.id] ? 'cell-svc col-pending' : 'cell-svc';
+      const operador = svc === 'pushback' && st !== STATUS.CINZA && f.pushback?.escalado
+        ? String(f.pushback.operador || '').trim()
+        : '';
+      if (operador) {
+        return `<td class="${col}"><div class="chip ${st.cls}"><span class="chip-nome">${escapeHtml(operador)}</span></div></td>`;
+      }
       return `<td class="${col}"><div class="chip ${st.cls}">${st.label}</div></td>`;
     }).join('');
 

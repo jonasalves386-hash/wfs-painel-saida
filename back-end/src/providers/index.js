@@ -5,6 +5,7 @@ const { SigaClient } = require('./SigaClient');
 const { MalhaProvider } = require('./MalhaProvider');
 const { FoniaProvider } = require('./FoniaProvider');
 const { RestProvider } = require('./RestProvider');
+const { PushbackProvider } = require('./PushbackProvider');
 
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -31,6 +32,11 @@ function createProviders(env = process.env) {
     fonia: new FoniaProvider({
       baseUrl: env.FONIA_API_BASE_URL || malhaBaseUrl,
       apiKey: env.FONIA_STREAM_API_KEY,
+      timeoutMs,
+    }),
+    pushback: new PushbackProvider({
+      url: env.PUSH_API_BASE_URL,
+      apiKey: env.PUSH_API_TOKEN,
       timeoutMs,
     }),
     rest: new RestProvider({

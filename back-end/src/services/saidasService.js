@@ -179,12 +179,25 @@ function selectFlights(flights, selectedDate, now) {
     ));
 }
 
-function publicFlight(flight, foniaRecord, restRecord, availability) {
+function normalizePushback(record) {
+  const service = record?.pushback || {};
+  const operador = String(service.operador || '').trim();
+  return {
+    escalado: Boolean(service.escalado),
+    naPosicao: Boolean(service.naPosicao),
+    acoplado: Boolean(service.acoplado),
+    finalizado: Boolean(service.finalizado),
+    operador,
+    valor: operador,
+  };
+}
+
+function publicFlight(flight, foniaRecord, pushbackRecord, restRecord, availability) {
   // Um PUSH_OUT da Malha nunca alcança esta etapa: ele já foi excluído em
   // selectFlights. Provedores de equipe não podem simular esse sinal terminal.
   const pushReal = false;
   const fonia = normalizeFonia(foniaRecord);
-  const pushback = normalizeService(restRecord, ['pushback', 'push_back', 'PUSHBACK']);
+  const pushback = normalizePushback(pushbackRecord);
   const qtu = normalizeService(restRecord, ['qtu', 'QTU']);
   const qta = normalizeService(restRecord, ['qta', 'QTA']);
 
@@ -203,20 +216,37 @@ function publicFlight(flight, foniaRecord, restRecord, availability) {
     data: flight.date,
     servicos: {
       fonia: { ...fonia, indisponivel: !availability.fonia, pushReal },
-      pushback: { ...pushback, indisponivel: !availability.restService('pushback'), pushReal },
-      qtu: { ...qtu, indisponivel: !availability.restService('qtu'), pushReal },
+      pushback: { ...pushback, indisponivel: !availability.pushback, pushReal },
+      qtu: { ...qtu, indisponivel: !availability.rest, pushReal },
       qta: {
         ...qta,
         emAndamento: qta.escalado && !qta.finalizado,
-        indisponivel: !availability.restService('qta'),
+        indisponivel: !availability.rest,
         pushReal,
       },
     },
   };
 }
 
-function createSaidasService(providers, logger = console, { restServices = ['pushback', 'qtu', 'qta'] } = {}) {
-  restServices = new Set(restServices);
+const PUSHBACK_REUSE_MS = 5 * 60 * 1000;
+
+function createSaidasService(providers, logger = console) {
+  const pushbackProvider = providers.pushback || { isConfigured: () => false, getEscalados: async () => [] };
+  // Último retorno válido do Pushback, para uma falha pontual não apagar a linha.
+  let lastPushback = { at: 0, dates: '', records: [] };
+
+  async function loadPushback(dates, now) {
+    try {
+      const results = await Promise.all(dates.map((date) => pushbackProvider.getEscalados(date)));
+      lastPushback = { at: now.getTime(), dates: dates.join(','), records: results.flat() };
+      return { ok: true, records: lastPushback.records };
+    } catch (error) {
+      logger.error('[saidas] Falha no provider Pushback.', error.code || error.name);
+      const reusable = lastPushback.dates === dates.join(',') && now.getTime() - lastPushback.at <= PUSHBACK_REUSE_MS;
+      return { ok: reusable, records: reusable ? lastPushback.records : [] };
+    }
+  }
+
   async function getVoos({ date, now = new Date() } = {}) {
     const selectedDate = normalizeSelectedDate(date, now);
 
@@ -236,11 +266,18 @@ function createSaidasService(providers, logger = console, { restServices = ['pus
 
     const normalizedDepartures = adaptSigaDepartures(snapshot);
     const departures = selectFlights(normalizedDepartures, selectedDate, now);
+    // Casamento do Pushback por data + voo: consulta as datas operacionais dos
+    // voos exibidos (na virada do dia podem ser duas).
+    const pushbackDates = [...new Set(departures.map((flight) => flight.date))].sort();
     const tasks = [
       providers.fonia.isConfigured() ? providers.fonia.getAssignments(selectedDate) : Promise.resolve(null),
       providers.rest.isConfigured() ? providers.rest.getDepartureServices(selectedDate) : Promise.resolve(null),
+      pushbackProvider.isConfigured() && pushbackDates.length
+        ? loadPushback(pushbackDates, now)
+        : Promise.resolve({ ok: pushbackProvider.isConfigured(), records: [] }),
     ];
-    const [foniaResult, restResult] = await Promise.allSettled(tasks);
+    const [foniaResult, restResult, pushbackResult] = await Promise.allSettled(tasks);
+    const pushbackLoad = pushbackResult.value;
 
     if (foniaResult.status === 'rejected') logger.error('[saidas] Falha no provider Fonia.', foniaResult.reason?.code || foniaResult.reason?.name);
     if (restResult.status === 'rejected') logger.error('[saidas] Falha no provider REST.', restResult.reason?.code || restResult.reason?.name);
@@ -249,17 +286,18 @@ function createSaidasService(providers, logger = console, { restServices = ['pus
     const restRecords = restResult.status === 'fulfilled' && Array.isArray(restResult.value) ? restResult.value : [];
     const foniaIndex = indexRecords(foniaRecords);
     const restIndex = indexRecords(restRecords);
-    const restOk = providers.rest.isConfigured() && restResult.status === 'fulfilled';
+    const pushbackIndex = indexRecords(pushbackLoad.records);
     const availability = {
       fonia: providers.fonia.isConfigured() && foniaResult.status === 'fulfilled',
-      // Só os serviços liberados sinalizam; os demais ficam cinza mesmo com a API no ar.
-      restService: (name) => restOk && restServices.has(name),
+      pushback: pushbackProvider.isConfigured() && pushbackLoad.ok,
+      rest: providers.rest.isConfigured() && restResult.status === 'fulfilled',
     };
 
     const value = {
       voos: departures.map((flight) => publicFlight(
         flight,
         findRecord(foniaIndex, flight),
+        findRecord(pushbackIndex, flight),
         findRecord(restIndex, flight),
         availability,
       )),
@@ -272,6 +310,9 @@ function createSaidasService(providers, logger = console, { restServices = ['pus
           fonia: !providers.fonia.isConfigured()
             ? 'nao_configurada'
             : foniaResult.status === 'fulfilled' ? 'disponivel' : 'indisponivel',
+          pushback: !pushbackProvider.isConfigured()
+            ? 'nao_configurada'
+            : pushbackLoad.ok ? 'disponivel' : 'indisponivel',
           rest: !providers.rest.isConfigured()
             ? 'nao_configurada'
             : restResult.status === 'fulfilled' ? 'disponivel' : 'indisponivel',
