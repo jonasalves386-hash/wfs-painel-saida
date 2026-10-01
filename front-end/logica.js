@@ -5,6 +5,10 @@ const SERVICES = ['fonia', 'pushback', 'qtu', 'qta'];
 const LOTE_SIZE = 12;
 const ROTATION_MS = 60 * 60 * 1000;
 const JANELA_MINUTOS = 60;
+const SAO_PAULO_TZ = 'America/Sao_Paulo';
+const REQUEST_TIMEOUT_MS = 125000;
+const STORAGE_KEY = 'wfs-saidas:last-valid-flights';
+const STORAGE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 const SVC_LABEL = {
   fonia:    'FONIA',
@@ -28,7 +32,11 @@ function minutesTo(date) {
 }
 
 function fmtTime(d) {
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('pt-BR', {
+    timeZone: SAO_PAULO_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function fmtTempo(mins) {
@@ -40,9 +48,8 @@ function fmtTempo(mins) {
 }
 
 function tempoClass(mins) {
-  if (mins <= 0) return 't-atrasado';
-  if (mins <= 15) return 't-urgente';
-  if (mins <= 30) return 't-alerta';
+  if (mins <= 5) return 't-atrasado';
+  if (mins <= 15) return 't-alerta';
   return 't-normal';
 }
 
@@ -61,6 +68,7 @@ function vooEmPushReal(f) {
 // Caso contrário: AZUL=escalado | AMARELO<=50 | VERMELHO<=40 | CINZA
 function foniaStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
+  if (f.fonia?.indisponivel) return STATUS.CINZA;
   if (f.fonia?.escalado) return STATUS.AZUL;
 
   const mins = minutesTo(f.t);
@@ -75,6 +83,7 @@ function foniaStatus(f) {
 // AMARELO<=20 | VERMELHO<=15 | CINZA.
 function pushbackStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
+  if (f.pushback?.indisponivel) return STATUS.CINZA;
   if (f.pushback?.finalizado) return STATUS.VERDE;
 
   const mins = minutesTo(f.t);
@@ -96,6 +105,7 @@ function pushbackStatus(f) {
 // Se não escalado: AMARELO<=45, VERMELHO<=30.
 function qtuStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
+  if (f.qtu?.indisponivel) return STATUS.CINZA;
   if (f.qtu?.finalizado) return STATUS.VERDE;
 
   const mins = minutesTo(f.t);
@@ -117,6 +127,7 @@ function qtuStatus(f) {
 // Se não escalado: AMARELO<=45, VERMELHO<=30.
 function qtaStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
+  if (f.qta?.indisponivel) return STATUS.CINZA;
   if (f.qta?.finalizado) return STATUS.VERDE;
 
   const mins = minutesTo(f.t);
@@ -147,6 +158,24 @@ function montarDataHojePorHorario(horario) {
   return d;
 }
 
+function parseHorarioOperacional(voo) {
+  const timestamp = voo.horario || voo.etd || voo.std;
+  const parsed = new Date(timestamp || '');
+  if (Number.isFinite(parsed.getTime())) return parsed;
+
+  const horario = String(timestamp || '').trim().slice(0, 5);
+  return montarDataHojePorHorario(horario);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function normalizarTempo(tempo) {
   if (typeof tempo === 'number') return tempo;
   if (typeof tempo !== 'string') return null;
@@ -163,6 +192,7 @@ function normalizarTempo(tempo) {
 }
 
 function isPending(f) {
+  if (vooEmPushReal(f)) return false;
   const mins = normalizarTempo(minutesTo(f.t));
   if (typeof mins === 'number' && !isNaN(mins) && mins <= 0) return true;
 
@@ -181,18 +211,18 @@ function allEscalado(f) {
   return Object.values(f.s).every(v => v === 'ESC');
 }
 
-// Remoção é feita pelo backend (push+2min); aqui apenas retorna false
-function deveRemoverVoo() {
-  return false;
+// A remoção oficial é do backend (PUSH_OUT da Malha). Aqui só protege contra
+// dados antigos (cache local / API fora) que já saíram da janela de -60 min.
+function deveRemoverVoo(f) {
+  return minutesTo(f.t) < -JANELA_MINUTOS;
 }
 
 // ─── ADAPTAR VOOS ─────────────────────────────────────────────────────────────
 
 function adaptarVoos(apiVoos) {
-  return apiVoos
+  const voos = apiVoos
     .map(v => {
-      const horario = String(v.horario || '').trim().slice(0, 5);
-      const data = montarDataHojePorHorario(horario);
+      const data = parseHorarioOperacional(v);
       if (!data) return null;
 
       const fonia    = v.servicos?.fonia    ?? { escalado: false, pushReal: false, valor: '' };
@@ -201,31 +231,57 @@ function adaptarVoos(apiVoos) {
       const qta      = v.servicos?.qta      ?? { escalado: false, finalizado: false, emAndamento: false, pushReal: false, valor: '' };
 
       return {
-        id:       String(v.voo || '').trim(),
+        id:       String(v.id || `${v.data || ''}|${v.voo || ''}|${v.prefixo || ''}`).trim(),
         voo:      String(v.voo || '').trim(),
         route:    String(v.destino || v.origem || '').trim() || '-',
         t:        data,
+        prefixo:  String(v.prefixo || '').trim(),
+        std:       v.std || null,
+        etd:       v.etd || null,
+        box:       String(v.box || v.posicao || '').trim(),
+        status:    String(v.status || '').trim(),
+        pushOut:   v.pushOutReal || null,
         fonia,
         pushback,
         qtu,
         qta,
         s: {
-          fonia:    fonia.escalado    ? 'ESC' : 'NAO',
-          pushback: pushback.escalado || pushback.finalizado ? 'ESC' : 'NAO',
-          qtu:      qtu.escalado      || qtu.finalizado      ? 'ESC' : 'NAO',
-          qta:      qta.escalado      || qta.finalizado       ? 'ESC' : 'NAO',
+          fonia:    fonia.escalado || fonia.pushReal ? 'ESC' : 'NAO',
+          pushback: pushback.escalado || pushback.finalizado || pushback.pushReal ? 'ESC' : 'NAO',
+          qtu:      qtu.escalado || qtu.finalizado || qtu.pushReal ? 'ESC' : 'NAO',
+          qta:      qta.escalado || qta.finalizado || qta.pushReal ? 'ESC' : 'NAO',
         },
       };
     })
     .filter(Boolean)
     .filter(f => !deveRemoverVoo(f))
-    .sort((a, b) => a.t - b.t)
-    .slice(0, LOTE_SIZE);
+    .sort((a, b) => a.t - b.t);
+
+  return [...new Map(voos.map(voo => [voo.id, voo])).values()];
 }
 
 // ─── ESTADO ───────────────────────────────────────────────────────────────────
 
-let allFlights  = [];
+function loadStoredFlights() {
+  try {
+    const payload = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    // Formato antigo (array sem data) ou cache velho não é reaproveitado.
+    if (!Array.isArray(payload?.voos) || !(Date.now() - payload.savedAt <= STORAGE_MAX_AGE_MS)) return [];
+    return adaptarVoos(payload.voos);
+  } catch {
+    return [];
+  }
+}
+
+function storeFlights(voos) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ savedAt: Date.now(), voos }));
+  } catch {
+    // Proteção de recarga; a Malha consultada pelo backend continua sendo a fonte oficial.
+  }
+}
+
+let allFlights  = loadStoredFlights();
 let currentLote = [];
 let nextRotation = Date.now() + ROTATION_MS;
 
@@ -279,12 +335,12 @@ function render() {
   // VOO
   const thVoos = flights.map(f => {
     const cls = colPending[f.id] ? 'col-voo has-pending' : 'col-voo';
-    return `<th class="${cls}">${f.id}</th>`;
+    return `<th class="${cls}">${escapeHtml(f.voo)}</th>`;
   }).join('');
   rows.push(`<tr><th class="row-label">VOO</th>${thVoos}</tr>`);
 
   // DESTINO
-  const tdDestino = flights.map(f => `<td class="cell-info">${f.route}</td>`).join('');
+  const tdDestino = flights.map(f => `<td class="cell-info">${escapeHtml(f.route)}</td>`).join('');
   rows.push(`<tr><td class="row-label">DESTINO</td>${tdDestino}</tr>`);
 
   // ETD
@@ -298,6 +354,10 @@ function render() {
     return `<td class="cell-info cell-tempo ${cls}">${fmtTempo(mins)}</td>`;
   }).join('');
   rows.push(`<tr><td class="row-label">TEMPO</td>${tdTempo}</tr>`);
+
+  // BOX
+  const tdBox = flights.map(f => `<td class="cell-info cell-gate">${escapeHtml(f.box || '-')}</td>`).join('');
+  rows.push(`<tr><td class="row-label">BOX</td>${tdBox}</tr>`);
 
   // separador
   const sepCols = flights.map(() => '<td></td>').join('');
@@ -320,7 +380,8 @@ function render() {
     rows.push(`<tr><td class="row-label">${SVC_LABEL[svc]}</td>${tds}</tr>`);
   });
 
-  table.innerHTML = rows.join('');
+  const nextHtml = rows.join('');
+  if (table.innerHTML !== nextHtml) table.innerHTML = nextHtml;
 }
 
 // ─── TICKER ───────────────────────────────────────────────────────────────────
@@ -329,7 +390,7 @@ const msgs = [
   'WFS · PAINEL DE CONTROLE OPERACIONAL · GRU',
   'LATAM SAÍDAS',
   'ROTAÇÃO AUTOMÁTICA A CADA 1 HORA',
-  'AMARELO = ATENÇÃO · VERMELHO = CRÍTICO · AZUL = ESCALADO · VERDE = FINALIZADO · CINZA = FORA DA JANELA',
+  'AMARELO = ATENÇÃO · VERMELHO = CRÍTICO · AZUL = ESCALADO · VERDE = FINALIZADO · CINZA = SEM SINAL OU FORA DA JANELA',
 ];
 
 document.getElementById('ticker').innerHTML =
@@ -339,41 +400,104 @@ document.getElementById('ticker').innerHTML =
 
 function updateClock() {
   document.getElementById('clock').textContent =
-    new Date().toLocaleTimeString('pt-BR');
+    new Date().toLocaleTimeString('pt-BR', { timeZone: SAO_PAULO_TZ });
 }
 
 // ─── FETCH ───────────────────────────────────────────────────────────────────
 
+function selectedDate() {
+  const selected = document.querySelector('[data-selected-date]')?.value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(selected || '')) return selected;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SAO_PAULO_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function setAvailability(state, details = '') {
+  const live = document.querySelector('.live');
+  const label = document.querySelector('.live-text');
+  const dot = document.querySelector('.live-dot');
+  if (!live || !label || !dot) return;
+
+  const settings = {
+    ok:      { label: 'AO VIVO', textColor: '#4bd67e', dotColor: '#27bd64' },
+    partial: { label: 'DADOS PARCIAIS', textColor: '#f4dd29', dotColor: '#d2bf08' },
+    down:    { label: 'ATUALIZAÇÃO INDISPONÍVEL', textColor: '#f4dd29', dotColor: '#d2bf08' },
+  }[state];
+  label.textContent = settings.label;
+  label.style.color = settings.textColor;
+  dot.style.background = settings.dotColor;
+  dot.style.boxShadow = 'none';
+  live.title = details;
+}
+
+function reconcileFlights(nextFlights) {
+  allFlights = nextFlights;
+  const available = new Set(allFlights.map(flight => flight.id));
+  const kept = currentLote.filter(id => available.has(id));
+  const keptSet = new Set(kept);
+  const additions = allFlights
+    .filter(flight => !keptSet.has(flight.id))
+    .sort((a, b) => a.t - b.t)
+    .map(flight => flight.id);
+  currentLote = [...kept, ...additions].slice(0, LOTE_SIZE);
+}
+
+let fetchSequence = 0;
+let requestInProgress = false;
+
 async function fetchFlights() {
+  if (requestInProgress) return;
+  requestInProgress = true;
+  const sequence = ++fetchSequence;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${API_URL}?t=${Date.now()}`, { cache: 'no-store' });
+    const query = new URLSearchParams({ data: selectedDate(), t: String(Date.now()) });
+    const res = await fetch(`${API_URL}?${query}`, { cache: 'no-store', signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const data = await res.json();
-    if (!Array.isArray(data)) {
-      console.error('Formato inesperado da API:', data);
-      allFlights  = [];
-      currentLote = [];
-      render();
-      return;
-    }
+    const payload = await res.json();
+    const data = Array.isArray(payload) ? payload : payload?.voos;
+    if (!Array.isArray(data)) throw new Error('Formato inesperado da API');
+    if (sequence !== fetchSequence) return;
 
-    console.log('TOTAL API:', data.length);
-    allFlights  = adaptarVoos(data);
-    currentLote = buildLote();
-    console.log('VOOS NA TELA:', currentLote.length);
+    reconcileFlights(adaptarVoos(data));
+    storeFlights(data);
+    const availability = payload?.meta?.disponibilidade;
+    const unavailable = availability
+      ? Object.entries(availability).filter(([, value]) => value === 'indisponivel')
+      : [];
+    setAvailability(
+      unavailable.length ? 'partial' : 'ok',
+      unavailable.length ? `Fontes: ${unavailable.map(([name, state]) => `${name} ${state}`).join(', ')}` : '',
+    );
 
     render();
   } catch (err) {
     console.error('Erro ao buscar voos:', err);
+    if (sequence !== fetchSequence) return;
+    setAvailability('down', 'Não foi possível atualizar os dados.');
+    if (!allFlights.length) render();
+  } finally {
+    clearTimeout(timeout);
+    requestInProgress = false;
   }
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
-currentLote  = [];
+currentLote  = buildLote();
 nextRotation = Date.now() + ROTATION_MS;
 
+render();
+setAvailability(
+  allFlights.length ? 'partial' : 'down',
+  allFlights.length ? 'Exibindo o último estado salvo enquanto a Malha é atualizada.' : 'Aguardando a Malha.',
+);
 fetchFlights();
 updateClock();
 

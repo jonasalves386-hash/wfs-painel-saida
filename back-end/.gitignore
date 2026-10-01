@@ -1,6 +1,9 @@
 node_modules/
 .env
+.runtime-cache/
 *.json
+!package.json
+!package-lock.json
 .claude/
 .github/
 .vscode/
