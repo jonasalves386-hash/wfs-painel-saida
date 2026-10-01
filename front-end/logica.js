@@ -81,9 +81,8 @@ function foniaStatus(f) {
 }
 
 // PUSHBACK (API de escalados do Pushback, casada por data + voo):
-// VERDE = na posição e acoplado.
-// AZUL = escalado (mostra o operador); VERMELHO se faltar <=10 min e ainda
-// não estiver na posição.
+// VERDE = operador na posição (ou acoplado).
+// AZUL = escalado, ainda não na posição (mostra o operador).
 // Sem escala: AMARELO<=20 | VERMELHO<=15 | CINZA fora da janela.
 function pushbackStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
@@ -92,11 +91,9 @@ function pushbackStatus(f) {
 
   const mins = minutesTo(f.t);
 
-  // Escalado: na posição fica azul até acoplar; sem chegar na posição,
-  // cobra novamente a partir de -10 min.
+  // Escalado: verde ao chegar na posição, azul enquanto não chega.
   if (f.pushback?.escalado) {
-    if (!f.pushback?.naPosicao && mins <= 10) return STATUS.VERMELHO;
-    return STATUS.AZUL;
+    return f.pushback?.naPosicao ? STATUS.VERDE : STATUS.AZUL;
   }
 
   if (mins <= 15) return STATUS.VERMELHO;
