@@ -367,7 +367,7 @@ tr.sep-row td {
   padding: 0 6px;
   white-space: normal;
   text-align: center;
-  font-size: clamp(13px, 0.95vw, 19px);
+  font-size: clamp(16px, 1.25vw, 26px);
   font-weight: 800;
   line-height: 1.15;
   color: #ffffff;
