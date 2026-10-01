@@ -104,7 +104,7 @@ test('filtra Wide Body e duplicados no backend antes da resposta', async () => {
         departure({ id: 'wide-model', prefix: 'XX-AAA', aircraft_model: 'B777-300', number_departure: 'LA8090' }),
       ],
     },
-    fonia: { isConfigured: () => true, getAssignments: async () => [{ operationId: 'dep-1', teamName: 'ALFA-T1' }] },
+    fonia: { isConfigured: () => true, getEscalados: async () => [{ date: '2026-09-29', flight_number: '3210', fonia: { escalado: true, equipe: 'ALFA - T1' } }] },
     rest: {
       isConfigured: () => true,
       getDepartureServices: async () => [{
@@ -168,7 +168,7 @@ test('remove status C do SIGA como cancelado', () => {
 test('falha de enriquecimento é sinalizada sem criar escala fictícia', async () => {
   const providers = {
     malha: { getFlightsSnapshot: async () => [departure()] },
-    fonia: { isConfigured: () => true, getAssignments: async () => { throw new Error('offline'); } },
+    fonia: { isConfigured: () => true, getEscalados: async () => { throw new Error('offline'); } },
     rest: { isConfigured: () => false, getDepartureServices: async () => [] },
   };
   const service = createSaidasService(providers, { error() {} });
@@ -229,7 +229,7 @@ test('polling remove o voo quando PUSH_OUT surge no snapshot seguinte, independe
     malha: { getFlightsSnapshot: async () => snapshot },
     fonia: {
       isConfigured: () => true,
-      getAssignments: async () => [{ operationId: 'dep-1', teamName: 'ALFA-T1', inPosition: true }],
+      getEscalados: async () => [{ date: '2026-09-29', flight_number: '3210', fonia: { escalado: true, naPosicao: true, equipe: 'ALFA - T1' } }],
     },
     rest: {
       isConfigured: () => true,
@@ -275,16 +275,16 @@ test('providers Fonia e REST consultam somente pelo backend com autenticação',
     return { ok: true, json: async () => [] };
   };
   const fonia = new FoniaProvider({
-    baseUrl: 'https://fonia.test', apiKey: 'fonia-key', fetchImpl,
+    url: 'https://fonia.test/integracao/saidas/escalados', apiKey: 'fonia-key', fetchImpl,
   });
   const rest = new RestProvider({
     baseUrl: 'https://rest.test', token: 'rest-token', fetchImpl,
   });
 
-  await fonia.getAssignments('2026-09-29');
+  await fonia.getEscalados('2026-09-29');
   await rest.getDepartureServices('2026-09-29');
 
-  assert.equal(calls[0].url, 'https://fonia.test/fonia/public?data=2026-09-29');
+  assert.equal(calls[0].url, 'https://fonia.test/integracao/saidas/escalados?data=2026-09-29');
   assert.equal(calls[0].options.headers['x-api-key'], 'fonia-key');
   assert.equal(calls[1].url, 'https://rest.test/voos?tipo=saida&data=2026-09-29');
   assert.equal(calls[1].options.headers.Authorization, 'Bearer rest-token');
@@ -380,7 +380,7 @@ test('serviço entrega cache stale com indisponibilidade explícita, sem transfo
       getFlightsSnapshot: async () => [departure()],
       getCacheStatus: () => ({ stale: true, updatedAt: '2026-09-29T14:59:00.000Z' }),
     },
-    fonia: { isConfigured: () => false, getAssignments: async () => [] },
+    fonia: { isConfigured: () => false, getEscalados: async () => [] },
     rest: { isConfigured: () => false, getDepartureServices: async () => [] },
   };
   const result = await createSaidasService(providers, { error() {} }).getVoos({
@@ -399,7 +399,7 @@ test('snapshot SIGA válido e vazio é uma resposta disponível com zero voos', 
       getFlightsSnapshot: async () => [],
       getCacheStatus: () => ({ stale: false, updatedAt: '2026-09-29T15:00:00.000Z' }),
     },
-    fonia: { isConfigured: () => false, getAssignments: async () => [] },
+    fonia: { isConfigured: () => false, getEscalados: async () => [] },
     rest: { isConfigured: () => false, getDepartureServices: async () => [] },
   };
   const result = await createSaidasService(providers, { error() {} }).getVoos({
@@ -418,7 +418,7 @@ test('falha SIGA sem cache é propagada e nunca convertida em zero voos', async 
   const failure = Object.assign(new Error('falha controlada'), { code: 'SIGA_UNAVAILABLE' });
   const providers = {
     malha: { getFlightsSnapshot: async () => { throw failure; } },
-    fonia: { isConfigured: () => false, getAssignments: async () => [] },
+    fonia: { isConfigured: () => false, getEscalados: async () => [] },
     rest: { isConfigured: () => false, getDepartureServices: async () => [] },
   };
 
@@ -491,7 +491,7 @@ function pushbackApiRecord(overrides = {}) {
 function servicesWithPushback(getEscalados) {
   return {
     malha: { getFlightsSnapshot: async () => [departure()] },
-    fonia: { isConfigured: () => false, getAssignments: async () => [] },
+    fonia: { isConfigured: () => false, getEscalados: async () => [] },
     rest: { isConfigured: () => false, getDepartureServices: async () => [] },
     pushback: { isConfigured: () => true, getEscalados },
   };
@@ -568,4 +568,46 @@ test('pushback: provider envia x-api-key e filtra por data', async () => {
   assert.equal(call.options.headers['x-api-key'], 'segredo');
   assert.equal(records[0].flight_number, '3210');
   assert.equal(new PushbackProvider({ url: '', apiKey: 'x' }).isConfigured(), false);
+});
+
+const { adaptFoniaRecord } = require('../src/providers/FoniaProvider');
+
+function foniaApiRecord(overrides = {}) {
+  return {
+    id: 'fo-1', voo: '3210', data: '2026-09-29', escalado: true,
+    equipe: { id: 'eq', nome: 'BRAVO - T1', cor: 'AZUL' }, apoio: null,
+    na_posicao: false, na_posicao_em: null, iniciada: false, finalizada: false, cancelado: false,
+    ...overrides,
+  };
+}
+
+test('fonia: adapta equipe, na posição e ignora cancelado', () => {
+  assert.deepEqual(adaptFoniaRecord(foniaApiRecord()).fonia, {
+    escalado: true, naPosicao: false, finalizado: false, equipe: 'BRAVO - T1', valor: 'BRAVO - T1',
+  });
+  assert.equal(adaptFoniaRecord(foniaApiRecord({ na_posicao: true })).fonia.naPosicao, true);
+  assert.equal(adaptFoniaRecord(foniaApiRecord({ cancelado: true })), null);
+  assert.equal(adaptFoniaRecord(foniaApiRecord({ equipe: null })).fonia.escalado, false);
+});
+
+test('fonia: casa data + voo ("3210" com "LA 3210") e entrega a equipe', async () => {
+  const providers = {
+    malha: { getFlightsSnapshot: async () => [departure()] },
+    fonia: { isConfigured: () => true, getEscalados: async () => [adaptFoniaRecord(foniaApiRecord({ na_posicao: true }))] },
+    rest: { isConfigured: () => false, getDepartureServices: async () => [] },
+  };
+  const result = await createSaidasService(providers, { error() {} }).getVoos({ date: '2026-09-29', now: AT_1500 });
+  const { fonia } = result.voos[0].servicos;
+  assert.equal(fonia.indisponivel, false);
+  assert.equal(fonia.escalado, true);
+  assert.equal(fonia.naPosicao, true);
+  assert.equal(fonia.equipe, 'BRAVO - T1');
+  assert.equal(result.meta.disponibilidade.fonia, 'disponivel');
+  assert.equal(result.voos[0].servicos.qtu.indisponivel, true);
+});
+
+test('fonia: configuração lida de FONIA_API_URL e FONIA_API_KEY', () => {
+  const providers = createProviders({ FONIA_API_URL: 'https://fonia.test/integracao/saidas/escalados', FONIA_API_KEY: 'k' });
+  assert.equal(providers.fonia.isConfigured(), true);
+  assert.equal(createProviders({}).fonia.isConfigured(), false);
 });

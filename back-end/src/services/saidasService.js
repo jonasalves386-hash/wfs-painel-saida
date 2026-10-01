@@ -124,13 +124,15 @@ function normalizeService(record, names) {
 }
 
 function normalizeFonia(record) {
-  if (!record) return { escalado: false, valor: '' };
-  const service = serviceObject(record, ['fonia', 'FONIA']);
-  const team = firstValue(service, ['teamName', 'equipe', 'team', 'valor', 'responsavel'])
-    || firstValue(record, ['teamName', 'equipe', 'team', 'fonia_team']);
-  const assigned = firstValue(service, ['escalado', 'assigned', 'isAssigned'])
-    || firstValue(record, ['escalado', 'assigned', 'isAssigned']);
-  return { escalado: bool(assigned) || Boolean(String(team || '').trim()), valor: String(team || '').trim() };
+  const service = record?.fonia || {};
+  const equipe = String(service.equipe || '').trim();
+  return {
+    escalado: Boolean(service.escalado),
+    naPosicao: Boolean(service.naPosicao),
+    finalizado: Boolean(service.finalizado),
+    equipe,
+    valor: equipe,
+  };
 }
 
 function minutesBetween(future, now) {
@@ -228,24 +230,33 @@ function publicFlight(flight, foniaRecord, pushbackRecord, restRecord, availabil
   };
 }
 
-const PUSHBACK_REUSE_MS = 5 * 60 * 1000;
+const REUSE_LAST_MS = 5 * 60 * 1000;
+const NOT_CONFIGURED = { isConfigured: () => false, getEscalados: async () => [] };
+
+// Consulta uma integração de escalados (Fonia/Pushback) para as datas dos voos
+// exibidos. Uma falha pontual reaproveita o último retorno válido por 5 min.
+function createEscaladosLoader(name, provider, logger) {
+  let last = { at: 0, dates: '', records: [] };
+
+  return async function load(dates, now) {
+    if (!provider.isConfigured()) return { state: 'nao_configurada', records: [] };
+    if (!dates.length) return { state: 'disponivel', records: [] };
+    const key = dates.join(',');
+    try {
+      const results = await Promise.all(dates.map((date) => provider.getEscalados(date)));
+      last = { at: now.getTime(), dates: key, records: results.flat() };
+      return { state: 'disponivel', records: last.records };
+    } catch (error) {
+      logger.error(`[saidas] Falha no provider ${name}.`, error.code || error.name);
+      const reusable = last.dates === key && now.getTime() - last.at <= REUSE_LAST_MS;
+      return reusable ? { state: 'disponivel', records: last.records } : { state: 'indisponivel', records: [] };
+    }
+  };
+}
 
 function createSaidasService(providers, logger = console) {
-  const pushbackProvider = providers.pushback || { isConfigured: () => false, getEscalados: async () => [] };
-  // Último retorno válido do Pushback, para uma falha pontual não apagar a linha.
-  let lastPushback = { at: 0, dates: '', records: [] };
-
-  async function loadPushback(dates, now) {
-    try {
-      const results = await Promise.all(dates.map((date) => pushbackProvider.getEscalados(date)));
-      lastPushback = { at: now.getTime(), dates: dates.join(','), records: results.flat() };
-      return { ok: true, records: lastPushback.records };
-    } catch (error) {
-      logger.error('[saidas] Falha no provider Pushback.', error.code || error.name);
-      const reusable = lastPushback.dates === dates.join(',') && now.getTime() - lastPushback.at <= PUSHBACK_REUSE_MS;
-      return { ok: reusable, records: reusable ? lastPushback.records : [] };
-    }
-  }
+  const loadFonia = createEscaladosLoader('Fonia', providers.fonia || NOT_CONFIGURED, logger);
+  const loadPushback = createEscaladosLoader('Pushback', providers.pushback || NOT_CONFIGURED, logger);
 
   async function getVoos({ date, now = new Date() } = {}) {
     const selectedDate = normalizeSelectedDate(date, now);
@@ -266,30 +277,29 @@ function createSaidasService(providers, logger = console) {
 
     const normalizedDepartures = adaptSigaDepartures(snapshot);
     const departures = selectFlights(normalizedDepartures, selectedDate, now);
-    // Casamento do Pushback por data + voo: consulta as datas operacionais dos
+    // Fonia e Pushback casam por data + voo: consulta as datas operacionais dos
     // voos exibidos (na virada do dia podem ser duas).
-    const pushbackDates = [...new Set(departures.map((flight) => flight.date))].sort();
-    const tasks = [
-      providers.fonia.isConfigured() ? providers.fonia.getAssignments(selectedDate) : Promise.resolve(null),
-      providers.rest.isConfigured() ? providers.rest.getDepartureServices(selectedDate) : Promise.resolve(null),
-      pushbackProvider.isConfigured() && pushbackDates.length
-        ? loadPushback(pushbackDates, now)
-        : Promise.resolve({ ok: pushbackProvider.isConfigured(), records: [] }),
-    ];
-    const [foniaResult, restResult, pushbackResult] = await Promise.allSettled(tasks);
-    const pushbackLoad = pushbackResult.value;
+    const flightDates = [...new Set(departures.map((flight) => flight.date))].sort();
+    const [foniaLoad, pushbackLoad, restResult] = await Promise.all([
+      loadFonia(flightDates, now),
+      loadPushback(flightDates, now),
+      providers.rest.isConfigured()
+        ? providers.rest.getDepartureServices(selectedDate).then(
+          (value) => ({ status: 'fulfilled', value }),
+          (reason) => ({ status: 'rejected', reason }),
+        )
+        : Promise.resolve({ status: 'fulfilled', value: null }),
+    ]);
 
-    if (foniaResult.status === 'rejected') logger.error('[saidas] Falha no provider Fonia.', foniaResult.reason?.code || foniaResult.reason?.name);
     if (restResult.status === 'rejected') logger.error('[saidas] Falha no provider REST.', restResult.reason?.code || restResult.reason?.name);
 
-    const foniaRecords = foniaResult.status === 'fulfilled' && Array.isArray(foniaResult.value) ? foniaResult.value : [];
     const restRecords = restResult.status === 'fulfilled' && Array.isArray(restResult.value) ? restResult.value : [];
-    const foniaIndex = indexRecords(foniaRecords);
+    const foniaIndex = indexRecords(foniaLoad.records);
     const restIndex = indexRecords(restRecords);
     const pushbackIndex = indexRecords(pushbackLoad.records);
     const availability = {
-      fonia: providers.fonia.isConfigured() && foniaResult.status === 'fulfilled',
-      pushback: pushbackProvider.isConfigured() && pushbackLoad.ok,
+      fonia: foniaLoad.state === 'disponivel',
+      pushback: pushbackLoad.state === 'disponivel',
       rest: providers.rest.isConfigured() && restResult.status === 'fulfilled',
     };
 
@@ -307,12 +317,8 @@ function createSaidasService(providers, logger = console) {
         atualizadoEm: now.toISOString(),
         disponibilidade: {
           malha: malhaCache.stale ? 'indisponivel' : 'disponivel',
-          fonia: !providers.fonia.isConfigured()
-            ? 'nao_configurada'
-            : foniaResult.status === 'fulfilled' ? 'disponivel' : 'indisponivel',
-          pushback: !pushbackProvider.isConfigured()
-            ? 'nao_configurada'
-            : pushbackLoad.ok ? 'disponivel' : 'indisponivel',
+          fonia: foniaLoad.state,
+          pushback: pushbackLoad.state,
           rest: !providers.rest.isConfigured()
             ? 'nao_configurada'
             : restResult.status === 'fulfilled' ? 'disponivel' : 'indisponivel',

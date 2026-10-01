@@ -30,8 +30,8 @@ function createProviders(env = process.env) {
       cachePath: path.resolve(__dirname, '../../.runtime-cache/malha-snapshot.json'),
     }),
     fonia: new FoniaProvider({
-      baseUrl: env.FONIA_API_BASE_URL || malhaBaseUrl,
-      apiKey: env.FONIA_STREAM_API_KEY,
+      url: env.FONIA_API_URL,
+      apiKey: env.FONIA_API_KEY,
       timeoutMs,
     }),
     pushback: new PushbackProvider({

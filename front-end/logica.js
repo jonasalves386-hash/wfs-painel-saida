@@ -64,11 +64,14 @@ function vooEmPushReal(f) {
   );
 }
 
-// FONIA: se push real foi detectado, tudo verde.
-// Caso contrário: AZUL=escalado | AMARELO<=50 | VERMELHO<=40 | CINZA
+// FONIA (API de escalados da Fonia, casada por data + voo):
+// VERDE = equipe na posição (botão pressionado no mobile).
+// AZUL = escalado (mostra a equipe).
+// Sem escala: AMARELO<=50 | VERMELHO<=40 | CINZA fora da janela.
 function foniaStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
   if (f.fonia?.indisponivel) return STATUS.CINZA;
+  if (f.fonia?.escalado && f.fonia?.naPosicao) return STATUS.VERDE;
   if (f.fonia?.escalado) return STATUS.AZUL;
 
   const mins = minutesTo(f.t);
@@ -174,6 +177,14 @@ function nomeCurto(nome) {
   const partes = String(nome || '').trim().split(/\s+/).filter(Boolean);
   const sobrenome = partes.slice(1).find(p => !/^(D[AEO]S?|E)$/i.test(p));
   return [partes[0], sobrenome].filter(Boolean).join(' ');
+}
+
+// Nome exibido dentro do quadrado quando o serviço está escalado.
+function nomeEscalado(svc, f, st) {
+  if (st === STATUS.CINZA) return '';
+  if (svc === 'pushback' && f.pushback?.escalado) return nomeCurto(f.pushback.operador);
+  if (svc === 'fonia' && f.fonia?.escalado) return String(f.fonia.equipe || '').trim();
+  return '';
 }
 
 function escapeHtml(value) {
@@ -383,11 +394,9 @@ function render() {
       else                         st = STATUS.CINZA;
 
       const col = colPending[f.id] ? 'cell-svc col-pending' : 'cell-svc';
-      const operador = svc === 'pushback' && st !== STATUS.CINZA && f.pushback?.escalado
-        ? nomeCurto(f.pushback.operador)
-        : '';
-      if (operador) {
-        return `<td class="${col}"><div class="chip ${st.cls}"><span class="chip-nome">${escapeHtml(operador)}</span></div></td>`;
+      const nome = nomeEscalado(svc, f, st);
+      if (nome) {
+        return `<td class="${col}"><div class="chip ${st.cls}"><span class="chip-nome">${escapeHtml(nome)}</span></div></td>`;
       }
       return `<td class="${col}"><div class="chip ${st.cls}">${st.label}</div></td>`;
     }).join('');
