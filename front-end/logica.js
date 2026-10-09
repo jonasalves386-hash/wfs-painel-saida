@@ -184,6 +184,11 @@ function nomeEscalado(svc, f, st) {
   return '';
 }
 
+// Remove só visualmente o prefixo inicial "LA" (qualquer caixa); o valor original não muda.
+function vooExibicao(voo) {
+  return String(voo ?? '').replace(/^la/i, '');
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -352,7 +357,7 @@ function render() {
   // VOO
   const thVoos = flights.map(f => {
     const cls = colPending[f.id] ? 'col-voo has-pending' : 'col-voo';
-    return `<th class="${cls}">${escapeHtml(f.voo)}</th>`;
+    return `<th class="${cls}">${escapeHtml(vooExibicao(f.voo))}</th>`;
   }).join('');
   rows.push(`<tr><th class="row-label">VOO</th>${thVoos}</tr>`);
 
