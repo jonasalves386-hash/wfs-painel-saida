@@ -110,7 +110,8 @@ function pushbackStatus(f) {
 // QTA, QTU e RETIRADA: aguardando conexão com a API -> sempre cinza.
 function qtuStatus() { return STATUS.CINZA; }
 function qtaStatus() { return STATUS.CINZA; }
-function retiradaStatus() { return STATUS.CINZA; }
+// RETIRADA: amarelo quando há retirada lançada (hr_retirada); sem retirada fica cinza.
+function retiradaStatus(f) { return f.retirada?.texto ? STATUS.AMARELO : STATUS.CINZA; }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,7 @@ function isPending(f) {
   if (typeof mins === 'number' && !isNaN(mins) && mins <= 0) return true;
 
   return SERVICES.some(svc => {
+    if (svc === 'retirada') return false; // amarelo da retirada é informativo, não pendência
     let st;
     if      (svc === 'fonia')    st = foniaStatus(f);
     else if (svc === 'pushback') st = pushbackStatus(f);
@@ -371,7 +373,7 @@ function render() {
       const nome = nomeEscalado(svc, f, st);
       if (svc === 'retirada') {
         const pend = f.retirada?.pendentes > 0 ? ` title="Bagagens pendentes: ${Number(f.retirada.pendentes)}"` : '';
-        return `<td class="${col}"><div class="chip ${st.cls}"${pend}><span class="chip-nome">${escapeHtml(nome || '-')}</span></div></td>`;
+        return `<td class="${col}"><div class="chip chip-retirada ${st.cls}"${pend}><span class="chip-nome">${escapeHtml(nome || '-')}</span></div></td>`;
       }
       if (nome) {
         return `<td class="${col}"><div class="chip ${st.cls}"><span class="chip-nome">${escapeHtml(nome)}</span></div></td>`;

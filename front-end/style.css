@@ -358,6 +358,12 @@ tr.sep-row td {
   }
 }
 
+/* Retirada lançada: fundo amarelo, texto escuro para leitura. */
+.chip-retirada .chip-nome {
+  color: #1d1f23;
+  text-shadow: none;
+}
+
 /* Nome do operador escalado dentro do quadrado do serviço (PUSHBACK). */
 .chip-nome {
   display: -webkit-box;
