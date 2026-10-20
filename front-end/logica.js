@@ -1,7 +1,9 @@
 const API_URL = `${API_BASE_URL}/voos`;
 
 // Ordem dos serviços conforme spec Saídas
-const SERVICES = ['fonia', 'pushback', 'qtu', 'qta'];
+const SERVICES = ['fonia', 'pushback', 'qta', 'qtu', 'retirada'];
+// Serviços já ligados a uma API; os demais ficam cinza até a conexão existir.
+const SERVICES_COM_API = ['fonia', 'pushback'];
 const LOTE_SIZE = 12;
 const ROTATION_MS = 60 * 60 * 1000;
 const JANELA_MINUTOS = 60;
@@ -15,6 +17,7 @@ const SVC_LABEL = {
   pushback: 'PUSHBACK',
   qtu:      'QTU',
   qta:      'QTA',
+  retirada: 'RETIRADA',
 };
 
 const STATUS = {
@@ -67,7 +70,7 @@ function vooEmPushReal(f) {
 // FONIA (API de escalados da Fonia, casada por data + voo):
 // VERDE = equipe na posição (botão pressionado no mobile).
 // AZUL = escalado (mostra a equipe).
-// Sem escala: AMARELO<=50 | VERMELHO<=40 | CINZA fora da janela.
+// Sem escala: AMARELO<=40 | CINZA fora da janela.
 function foniaStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
   if (f.fonia?.indisponivel) return STATUS.CINZA;
@@ -75,14 +78,14 @@ function foniaStatus(f) {
   if (f.fonia?.escalado) return STATUS.AZUL;
 
   const mins = minutesTo(f.t);
-  if (mins <= 40) return STATUS.VERMELHO;
-  if (mins <= 50) return STATUS.AMARELO;
+  if (mins <= 40) return STATUS.AMARELO;
   return STATUS.CINZA;
 }
 
 // PUSHBACK (API de escalados do Pushback, casada por data + voo):
 // VERDE = operador na posição (ou acoplado).
 // AZUL = escalado, ainda não na posição (mostra o operador).
+// Escalado e fora da posição: AMARELO<=10 | VERMELHO piscando<=5.
 // Sem escala: AMARELO<=20 | VERMELHO<=15 | CINZA fora da janela.
 function pushbackStatus(f) {
   if (vooEmPushReal(f)) return STATUS.VERDE;
@@ -93,7 +96,10 @@ function pushbackStatus(f) {
 
   // Escalado: verde ao chegar na posição, azul enquanto não chega.
   if (f.pushback?.escalado) {
-    return f.pushback?.naPosicao ? STATUS.VERDE : STATUS.AZUL;
+    if (f.pushback?.naPosicao) return STATUS.VERDE;
+    if (mins <= 5) return STATUS.VERMELHO;
+    if (mins <= 10) return STATUS.AMARELO;
+    return STATUS.AZUL;
   }
 
   if (mins <= 15) return STATUS.VERMELHO;
@@ -101,49 +107,10 @@ function pushbackStatus(f) {
   return STATUS.CINZA;
 }
 
-// QTU:
-// VERDE = finalizado.
-// Se escalado mas não finalizado: AZUL até >35, AMARELO<=35, VERMELHO<=30.
-// Se não escalado: AMARELO<=45, VERMELHO<=30.
-function qtuStatus(f) {
-  if (vooEmPushReal(f)) return STATUS.VERDE;
-  if (f.qtu?.indisponivel) return STATUS.CINZA;
-  if (f.qtu?.finalizado) return STATUS.VERDE;
-
-  const mins = minutesTo(f.t);
-
-  if (f.qtu?.escalado) {
-    if (mins <= 30) return STATUS.VERMELHO;
-    if (mins <= 35) return STATUS.AMARELO;
-    return STATUS.AZUL;
-  }
-
-  if (mins <= 30) return STATUS.VERMELHO;
-  if (mins <= 45) return STATUS.AMARELO;
-  return STATUS.CINZA;
-}
-
-// QTA:
-// VERDE = finalizado pela regra de porcentagem.
-// Se escalado mas não finalizado: AZUL até >35, AMARELO<=35, VERMELHO<=30.
-// Se não escalado: AMARELO<=45, VERMELHO<=30.
-function qtaStatus(f) {
-  if (vooEmPushReal(f)) return STATUS.VERDE;
-  if (f.qta?.indisponivel) return STATUS.CINZA;
-  if (f.qta?.finalizado) return STATUS.VERDE;
-
-  const mins = minutesTo(f.t);
-
-  if (f.qta?.escalado) {
-    if (mins <= 30) return STATUS.VERMELHO;
-    if (mins <= 35) return STATUS.AMARELO;
-    return STATUS.AZUL;
-  }
-
-  if (mins <= 30) return STATUS.VERMELHO;
-  if (mins <= 45) return STATUS.AMARELO;
-  return STATUS.CINZA;
-}
+// QTA, QTU e RETIRADA: aguardando conexão com a API -> sempre cinza.
+function qtuStatus() { return STATUS.CINZA; }
+function qtaStatus() { return STATUS.CINZA; }
+function retiradaStatus() { return STATUS.CINZA; }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -224,13 +191,14 @@ function isPending(f) {
     else if (svc === 'pushback') st = pushbackStatus(f);
     else if (svc === 'qtu')      st = qtuStatus(f);
     else if (svc === 'qta')      st = qtaStatus(f);
+    else if (svc === 'retirada') st = retiradaStatus(f);
     else return false;
     return st === STATUS.AMARELO || st === STATUS.VERMELHO;
   });
 }
 
 function allEscalado(f) {
-  return Object.values(f.s).every(v => v === 'ESC');
+  return SERVICES_COM_API.every(svc => f.s[svc] === 'ESC');
 }
 
 // A remoção oficial é do backend (PUSH_OUT da Malha). Aqui só protege contra
@@ -393,6 +361,7 @@ function render() {
       else if (svc === 'pushback') st = pushbackStatus(f);
       else if (svc === 'qtu')      st = qtuStatus(f);
       else if (svc === 'qta')      st = qtaStatus(f);
+      else if (svc === 'retirada') st = retiradaStatus(f);
       else                         st = STATUS.CINZA;
 
       const col = colPending[f.id] ? 'cell-svc col-pending' : 'cell-svc';
