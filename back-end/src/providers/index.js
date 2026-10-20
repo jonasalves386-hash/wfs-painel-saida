@@ -6,6 +6,7 @@ const { MalhaProvider } = require('./MalhaProvider');
 const { FoniaProvider } = require('./FoniaProvider');
 const { RestProvider } = require('./RestProvider');
 const { PushbackProvider } = require('./PushbackProvider');
+const { RetiradasProvider } = require('./RetiradasProvider');
 
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -37,6 +38,11 @@ function createProviders(env = process.env) {
     pushback: new PushbackProvider({
       url: env.PUSH_API_BASE_URL,
       apiKey: env.PUSH_API_TOKEN,
+      timeoutMs,
+    }),
+    retiradas: new RetiradasProvider({
+      url: env.RETIRADAS_API_BASE_URL,
+      apiKey: env.RETIRADAS_API_TOKEN,
       timeoutMs,
     }),
     rest: new RestProvider({

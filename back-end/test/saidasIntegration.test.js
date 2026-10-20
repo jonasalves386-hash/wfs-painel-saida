@@ -132,7 +132,7 @@ test('filtra Wide Body e duplicados no backend antes da resposta', async () => {
   assert.equal(result.voos[0].servicos.pushback.indisponivel, true);
   assert.equal(result.voos[0].servicos.qtu.finalizado, true);
   assert.deepEqual(result.meta.disponibilidade, {
-    malha: 'disponivel', fonia: 'disponivel', pushback: 'nao_configurada', rest: 'disponivel',
+    malha: 'disponivel', fonia: 'disponivel', pushback: 'nao_configurada', retiradas: 'nao_configurada', rest: 'disponivel',
   });
   assert.deepEqual(result.meta.contagens, {
     snapshot: 4, saidasNormalizadas: 4, saidasExibiveis: 1,

@@ -145,6 +145,7 @@ function nomeCurto(nome) {
 
 // Nome exibido dentro do quadrado quando o serviço está escalado.
 function nomeEscalado(svc, f, st) {
+  if (svc === 'retirada') return String(f.retirada?.texto || '').trim();
   if (st === STATUS.CINZA) return '';
   if (svc === 'pushback' && f.pushback?.escalado) return nomeCurto(f.pushback.operador);
   if (svc === 'fonia' && f.fonia?.escalado) return String(f.fonia.equipe || '').trim();
@@ -218,6 +219,7 @@ function adaptarVoos(apiVoos) {
       const fonia    = v.servicos?.fonia    ?? { escalado: false, pushReal: false, valor: '' };
       const pushback = v.servicos?.pushback ?? { escalado: false, finalizado: false, pushReal: false, valor: '' };
       const qtu      = v.servicos?.qtu      ?? { escalado: false, finalizado: false, pushReal: false, valor: '' };
+      const retirada = v.servicos?.retirada ?? { lancada: false, texto: '', pendentes: 0 };
       const qta      = v.servicos?.qta      ?? { escalado: false, finalizado: false, emAndamento: false, pushReal: false, valor: '' };
 
       return {
@@ -235,6 +237,7 @@ function adaptarVoos(apiVoos) {
         pushback,
         qtu,
         qta,
+        retirada,
         s: {
           fonia:    fonia.escalado || fonia.pushReal ? 'ESC' : 'NAO',
           pushback: pushback.escalado || pushback.finalizado || pushback.pushReal ? 'ESC' : 'NAO',
@@ -366,6 +369,10 @@ function render() {
 
       const col = colPending[f.id] ? 'cell-svc col-pending' : 'cell-svc';
       const nome = nomeEscalado(svc, f, st);
+      if (svc === 'retirada') {
+        const pend = f.retirada?.pendentes > 0 ? ` title="Bagagens pendentes: ${Number(f.retirada.pendentes)}"` : '';
+        return `<td class="${col}"><div class="chip ${st.cls}"${pend}><span class="chip-nome">${escapeHtml(nome || '-')}</span></div></td>`;
+      }
       if (nome) {
         return `<td class="${col}"><div class="chip ${st.cls}"><span class="chip-nome">${escapeHtml(nome)}</span></div></td>`;
       }

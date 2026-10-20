@@ -194,12 +194,24 @@ function normalizePushback(record) {
   };
 }
 
-function publicFlight(flight, foniaRecord, pushbackRecord, restRecord, availability) {
+function normalizeRetirada(record) {
+  const service = record?.retirada || {};
+  return {
+    lancada: Boolean(service.texto),
+    texto: service.texto || '',
+    status: service.status || null,
+    pendentes: service.pendentes || 0,
+    atualizadoEm: service.atualizadoEm || null,
+  };
+}
+
+function publicFlight(flight, foniaRecord, pushbackRecord, restRecord, retiradaRecord, availability) {
   // Um PUSH_OUT da Malha nunca alcança esta etapa: ele já foi excluído em
   // selectFlights. Provedores de equipe não podem simular esse sinal terminal.
   const pushReal = false;
   const fonia = normalizeFonia(foniaRecord);
   const pushback = normalizePushback(pushbackRecord);
+  const retirada = normalizeRetirada(retiradaRecord);
   const qtu = normalizeService(restRecord, ['qtu', 'QTU']);
   const qta = normalizeService(restRecord, ['qta', 'QTA']);
 
@@ -219,6 +231,7 @@ function publicFlight(flight, foniaRecord, pushbackRecord, restRecord, availabil
     servicos: {
       fonia: { ...fonia, indisponivel: !availability.fonia, pushReal },
       pushback: { ...pushback, indisponivel: !availability.pushback, pushReal },
+      retirada: { ...retirada, indisponivel: !availability.retiradas },
       qtu: { ...qtu, indisponivel: !availability.rest, pushReal },
       qta: {
         ...qta,
@@ -257,6 +270,7 @@ function createEscaladosLoader(name, provider, logger) {
 function createSaidasService(providers, logger = console) {
   const loadFonia = createEscaladosLoader('Fonia', providers.fonia || NOT_CONFIGURED, logger);
   const loadPushback = createEscaladosLoader('Pushback', providers.pushback || NOT_CONFIGURED, logger);
+  const loadRetiradas = createEscaladosLoader('Retiradas', providers.retiradas || NOT_CONFIGURED, logger);
 
   async function getVoos({ date, now = new Date() } = {}) {
     const selectedDate = normalizeSelectedDate(date, now);
@@ -280,9 +294,10 @@ function createSaidasService(providers, logger = console) {
     // Fonia e Pushback casam por data + voo: consulta as datas operacionais dos
     // voos exibidos (na virada do dia podem ser duas).
     const flightDates = [...new Set(departures.map((flight) => flight.date))].sort();
-    const [foniaLoad, pushbackLoad, restResult] = await Promise.all([
+    const [foniaLoad, pushbackLoad, retiradasLoad, restResult] = await Promise.all([
       loadFonia(flightDates, now),
       loadPushback(flightDates, now),
+      loadRetiradas(flightDates, now),
       providers.rest.isConfigured()
         ? providers.rest.getDepartureServices(selectedDate).then(
           (value) => ({ status: 'fulfilled', value }),
@@ -297,9 +312,11 @@ function createSaidasService(providers, logger = console) {
     const foniaIndex = indexRecords(foniaLoad.records);
     const restIndex = indexRecords(restRecords);
     const pushbackIndex = indexRecords(pushbackLoad.records);
+    const retiradasIndex = indexRecords(retiradasLoad.records);
     const availability = {
       fonia: foniaLoad.state === 'disponivel',
       pushback: pushbackLoad.state === 'disponivel',
+      retiradas: retiradasLoad.state === 'disponivel',
       rest: providers.rest.isConfigured() && restResult.status === 'fulfilled',
     };
 
@@ -309,6 +326,7 @@ function createSaidasService(providers, logger = console) {
         findRecord(foniaIndex, flight),
         findRecord(pushbackIndex, flight),
         findRecord(restIndex, flight),
+        findRecord(retiradasIndex, flight),
         availability,
       )),
       meta: {
@@ -319,6 +337,7 @@ function createSaidasService(providers, logger = console) {
           malha: malhaCache.stale ? 'indisponivel' : 'disponivel',
           fonia: foniaLoad.state,
           pushback: pushbackLoad.state,
+          retiradas: retiradasLoad.state,
           rest: !providers.rest.isConfigured()
             ? 'nao_configurada'
             : restResult.status === 'fulfilled' ? 'disponivel' : 'indisponivel',
